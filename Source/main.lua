@@ -1,10 +1,13 @@
 local gfx = playdate.graphics
 local snd = playdate.sound
 
-FPS = 30
+-- [[ GAME CONSTANTS ]]
 WIDTH = playdate.display.getWidth()
 HEIGHT = playdate.display.getHeight()
 BORDER = 4
+BreakoutFont = gfx.font.new 'font/breakoutfont'
+BricksList = {}
+State = 'Start'
 
 -- [[ BRICK CONSTANTS ]]
 BRICK_START_X = BORDER + 60
@@ -13,36 +16,18 @@ BRICK_PAD = 1
 BRICK_W = 20
 BRICK_H = 6
 
+-- [[ PATTERNS ]]
 CHECKERED = { 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 }
 BRICK = { 0x11, 0x11, 0xff, 0x44, 0xff, 0x88, 0x88, 0xff }
 BASKET = { 0xbb, 0x55, 0xee, 0x55, 0xbb, 0x55, 0xee, 0x55 }
 STRIPE = { 0xc3, 0x87, 0x0f, 0x1e, 0x3c, 0x78, 0xf0, 0xe1 }
 DIAMOND = { 0x22, 0x41, 0x80, 0x41, 0x22, 0x14, 0x08, 0x14 }
 
+-- [[ SOUND FX SETUP ]]
 Synth = {
-    snd.synth.new(snd.kWaveSquare),
-    snd.synth.new(snd.kWavePOPhase),
-    snd.synth.new(snd.kWavePODigital),
     hitWall = snd.synth.new(snd.kWavePOVosim),
-    snd.synth.new(snd.kWaveSine),
     hitPaddle = snd.synth.new(snd.kLFOSquare),
-    snd.synth.new(snd.kLFOSine),
-    snd.synth.new(snd.kLFOTriangle),
-    snd.synth.new(snd.kLFOSawtoothUp),
-    snd.synth.new(snd.kLFOSawtoothDown),
-    snd.synth.new(snd.kLFOSampleAndHold),
-    snd.synth.new(snd.kWaveSawtooth),
-    snd.synth.new(snd.kWaveTriangle),
-    snd.synth.new(snd.kFilterLowPass),
-    snd.synth.new(snd.kFilterPEQ),
-    snd.synth.new(snd.kFilterNotch),
-    snd.synth.new(snd.kFilterBandPass),
-    snd.synth.new(snd.kFilterHighPass),
-    snd.synth.new(snd.kFilterLowShelf),
     hitBrick = snd.synth.new(snd.kFormat8bitMono),
-    snd.synth.new(snd.kFormat8bitStereo),
-    snd.synth.new(snd.kFormat16bitMono),
-    snd.synth.new(snd.kFormat16bitStereo),
 }
 
 Synth.hitBrick:setVolume(0.9)
@@ -72,17 +57,7 @@ BrickNotes[2]:setInstrument(Synth.hitBrick:copy())
 BrickNotes[3]:setInstrument(Synth.hitBrick:copy())
 BrickNotes[4]:setInstrument(Synth.hitBrick:copy())
 
-BreakoutFont = gfx.font.new 'font/breakoutfont'
-
-BricksList = {}
-
-playdate.display.setRefreshRate(FPS)
-
-Point = {
-    x = nil,
-    y = nil,
-}
-
+-- [[ UTILITY ]]
 local function clamp(value, min, max)
     if value < min then
         return min
@@ -94,7 +69,6 @@ local function clamp(value, min, max)
 end
 
 local function intersection(ax, ay, ah, aw, bx, by, bh, bw)
-    -- Horizontal
     local aMin = ax
     local aMax = aMin + aw
     local bMin = bx
@@ -109,7 +83,6 @@ local function intersection(ax, ay, ah, aw, bx, by, bh, bw)
         return false
     end
 
-    -- Vertical
     aMin = ay
     aMax = aMin + ah
     bMin = by
@@ -161,9 +134,44 @@ function ScoreUI(x, y, digits)
     return scoreUI
 end
 
-function Brick(x, y)
-    print('Creating Brick...' .. #BricksList .. ': ' .. x .. ', ' .. y)
+function Game()
+    local game = {
+        continue = function()
+            GamePaddle = Paddle()
+            GameBall = Ball()
+        end,
+        init = function()
+            GamePaddle = Paddle()
+            GameBall = Ball()
+            PlayerScore = ScoreUI(BORDER + 32, BORDER + 144, 3)
+            if HighScore == nil then
+                HighScore = ScoreUI(BORDER + 32, BORDER + 39, 3)
+                HighScore.value = 0
+            end
+            DeathCounter = ScoreUI(BORDER + 2, BORDER + 90, 1)
+            DeathCounter.value = 0
+            PlayerNumber = ScoreUI(BORDER + 2, BORDER + 195, 1)
+            PlayerNumber.value = 1
+            BuildLevel()
+        end,
+        checkGameOver = function(self)
+            if DeathCounter.value > 3 then
+                self:handleHighScore()
+                State = 'GameOver'
+            else
+                State = 'Continue'
+            end
+        end,
+        handleHighScore = function()
+            if PlayerScore.value > HighScore.value then
+                HighScore.value = PlayerScore.value
+            end
+        end,
+    }
+    return game
+end
 
+function Brick(x, y)
     local brick = {
         x = x or BRICK_START_X,
         y = y or BRICK_START_Y,
@@ -188,15 +196,11 @@ function Brick(x, y)
             gfx.setPattern(self.p)
             gfx.fillRect(self.x, self.y, self.h, self.w)
         end,
-
-        update = function(self) end,
     }
     return brick
 end
 
 function Ball()
-    print 'Creating Ball'
-
     local ball = {
         x = clamp(math.random() * WIDTH, 210, 270),
         y = clamp(math.random() * HEIGHT, 10, 220),
@@ -224,27 +228,28 @@ function Ball()
                 local a = GamePaddle.x - (self.x + self.h)
                 local b = self.x - (GamePaddle.x + GamePaddle.h)
                 if a > b then
+                    -- hit the top of the paddle
                     self.x = GamePaddle.x - self.h
                     local ballMidY = self.y + (self.w / 2)
                     local rightBounds = GamePaddle.y + (GamePaddle.w * 0.35)
                     local leftBounds = GamePaddle.y + GamePaddle.w - (GamePaddle.w * 0.35)
 
                     if ballMidY >= leftBounds then
-                        -- print 'hit the top left of the paddle\n'
+                        -- hit the top left of the paddle
                         if self.dy > 0 then
                             self.dy = 1.4
                         else
                             self.dy = -self.dy
                         end
                     elseif ballMidY <= rightBounds then
-                        -- print 'hit the top right of the paddle\n'
+                        -- hit the top right of the paddle
                         if self.dy > 0 then
                             self.dy = -self.dy
                         else
                             self.dy = -1.4
                         end
                     else
-                        -- print 'hit the top center of the paddle\n'
+                        -- hit the top center of the paddle
                         if self.dy > 0 then
                             self.dy = 0.45
                         else
@@ -253,11 +258,10 @@ function Ball()
                     end
 
                     self.dx = -1
-                    -- print 'hit the top of the paddle\n'
                 else
+                    -- hit the bottom of the paddle
                     self.x = GamePaddle.x + GamePaddle.h
                     self.dx = 1
-                    -- print 'hit the bottom of the paddle\n'
                 end
                 return nil
             end
@@ -266,15 +270,15 @@ function Ball()
                 local a = self.x - BORDER
                 local b = WIDTH - self.x - self.h
                 if a > b then
+                    -- hit the bottom of the screen
                     self.x = WIDTH - BORDER - self.h
                     DeathCounter.value += 1
-                    Game:checkGameOver()
-                    -- print 'hit the bottom of the screen\n'
+                    Breakout:checkGameOver()
                 else
+                    -- hit the top of the screen
                     self:snd()
                     self.x = BORDER
                     self.dx = -self.dx
-                    -- print 'hit the top of the screen\n'
                 end
                 return nil
             end
@@ -287,13 +291,13 @@ function Ball()
                         local a = brick.x - (self.x + self.h)
                         local b = self.x - (brick.x + brick.h)
                         if a > b then
+                            -- hit the top of a brick
                             self.x = brick.x - self.h
                             self.dx = -1
-                            -- print 'hit the top of a brick\n'
                         else
+                            -- hit the bottom of a brick
                             self.x = brick.x + brick.h
                             self.dx = 1
-                            -- print 'hit the bottom of a brick\n'
                         end
                         return brick
                     end
@@ -308,19 +312,20 @@ function Ball()
             local paddleHCollision = intersection(self.x, ny, self.w, self.h, GamePaddle.x, GamePaddle.y, GamePaddle.w, GamePaddle.h)
 
             if paddleHCollision then
+                -- a paddle horizontal collision
                 GamePaddle:snd()
-                -- print 'a paddle horizontal collision\n'
                 local a = GamePaddle.y - (self.y + self.w)
                 local b = self.y - (GamePaddle.y + GamePaddle.w)
                 if a > b then
+                    -- hit the right of the paddle
                     self.y = GamePaddle.y - self.w
                     self.dy = -1
-                    -- print 'hit the right of the paddle\n'
                 else
+                    -- hit the left of the paddle
                     self.y = GamePaddle.y + GamePaddle.w
                     self.dy = 1
-                    -- print 'hit the left of the paddle\n'
                 end
+                -- hit the center of the paddle
                 return nil
             end
 
@@ -329,13 +334,13 @@ function Ball()
                 local a = self.y - BORDER
                 local b = HEIGHT - self.y - self.w
                 if a > b then
+                    -- hit the left of the screen
                     self.y = HEIGHT - BORDER - self.w
                     self.dy = -self.dy
-                    -- print 'hit the left of the screen\n'
                 else
+                    -- hit the right of the screen
                     self.y = BORDER
                     self.dy = -self.dy
-                    -- print 'hit the right of the screen\n'
                 end
                 return nil
             end
@@ -348,13 +353,13 @@ function Ball()
                         local a = brick.y - (self.y + self.w)
                         local b = self.y - (brick.y + brick.w)
                         if a > b then
+                            -- hit the right of a brick
                             self.y = brick.y - self.w
                             self.dy = -1
-                            -- print 'hit the right of a brick\n'
                         else
+                            -- hit the left of a brick
                             self.y = brick.y + brick.w
                             self.dy = 1
-                            -- print 'hit the left of a brick\n'
                         end
                         return brick
                     end
@@ -365,6 +370,7 @@ function Ball()
         end,
 
         update = function(self)
+            -- these will either be nil if no collision or a pointer to the brick
             local brickHitVertical = self:checkVerticalCollision()
             local brickHitHorizontal = self:checkHorizontalCollision()
 
@@ -386,8 +392,6 @@ function Ball()
 end
 
 function Paddle()
-    print 'Creating paddle...'
-
     local paddle = {
         x = WIDTH - 28,
         y = (HEIGHT / 2) - (30 / 2),
@@ -441,14 +445,6 @@ function BuildLevel()
                 brick.p = STRIPE
                 brick.value = 1
             end
-
-            -- [[ Some Asertions for sideways sanity ]]
-            if col == 1 and row == 1 then
-                assert(brick.x == 64)
-            end
-            if col == 1 and row == 2 then
-                assert(brick.x == 64)
-            end
             BricksList[i] = brick
             i += 1
         end
@@ -459,54 +455,15 @@ local function handlAllBricks()
     for b = 1, #BricksList, 1 do
         if BricksList[b].hp > 0 then
             BricksList[b]:show()
-            BricksList[b]:update()
         end
     end
 end
 
-function Game()
-    local game = {
-        continue = function()
-            GamePaddle = Paddle()
-            GameBall = Ball()
-        end,
-        init = function()
-            GamePaddle = Paddle()
-            GameBall = Ball()
-            PlayerScore = ScoreUI(BORDER + 32, BORDER + 144, 3)
-            if HighScore == nil then
-                HighScore = ScoreUI(BORDER + 32, BORDER + 39, 3)
-                HighScore.value = 0
-            end
-            DeathCounter = ScoreUI(BORDER + 2, BORDER + 90, 1)
-            DeathCounter.value = 0
-            PlayerNumber = ScoreUI(BORDER + 2, BORDER + 195, 1)
-            PlayerNumber.value = 1
-            BuildLevel()
-        end,
-        checkGameOver = function(self)
-            if DeathCounter.value > 3 then
-                self:handleHighScore()
-                State = 'GameOver'
-            else
-                State = 'Continue'
-            end
-        end,
-        handleHighScore = function()
-            if PlayerScore.value > HighScore.value then
-                HighScore.value = PlayerScore.value
-            end
-        end,
-    }
-    return game
-end
-
-State = 'Start'
-Game = Game()
+Breakout = Game()
 
 function playdate.update()
     if State == 'Start' then
-        Game:init()
+        Breakout:init()
         State = 'Pause'
     end
     DrawBackground()
@@ -533,10 +490,10 @@ function playdate.AButtonDown()
     end
     if State == 'Continue' then
         State = 'Game'
-        Game:continue()
+        Breakout:continue()
     end
     if State == 'GameOver' then
-        Game:init()
+        Breakout:init()
         State = 'Game'
     end
 end
