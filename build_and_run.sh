@@ -1,3 +1,5 @@
+#!/bin/env bash
+
 compilerPath='/home/ben/bin/PlaydateSDK-2.5.0/bin/pdc'
 simulatorPath='/home/ben/bin/PlaydateSDK-2.5.0/bin/PlaydateSimulator'
 sourcePath='./Source'
